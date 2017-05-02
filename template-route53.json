@@ -1,0 +1,18 @@
+{
+  "Comment": "string",
+  "Changes": [
+    {
+     "Action": "CREATE",
+      "ResourceRecordSet": {
+        "Name": "${website}",
+        "Type": "CNAME",
+        "TTL": 300,
+        "ResourceRecords": [
+          {
+            "Value": "${CFURI}"
+          }
+        ]
+      }
+    }
+  ]
+}

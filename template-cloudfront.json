@@ -1,0 +1,52 @@
+{
+  "CallerReference": "cf_${website}",
+  "DefaultRootObject": "index.html",
+  "Origins": {
+    "Quantity": 1,
+    "Items": [
+      {
+        "Id": "${website}.s3.amazonaws.com",
+        "DomainName": "${website}.s3.amazonaws.com",
+        "S3OriginConfig": {
+          "OriginAccessIdentity": "${OAIURI}"
+        },
+         "CustomHeaders": {
+          "Quantity": 0
+        }
+      }
+    ]
+  },
+  "Aliases": {
+    "Quantity": 1,
+    "Items": [
+      "${website}"
+    ]
+  },
+  "Logging": {
+    "Enabled": true,
+    "IncludeCookies": true,
+    "Bucket": "${website}.s3.amazonaws.com",
+    "Prefix": "cf_logs/"
+  },
+    "DefaultCacheBehavior": {
+    "TargetOriginId": "${website}.s3.amazonaws.com",
+    "ForwardedValues": {
+      "QueryString": true,
+      "Cookies": {
+        "Forward": "none"
+      }
+    },
+    "TrustedSigners": {
+      "Enabled": false,
+      "Quantity": 0
+    },
+    "ViewerProtocolPolicy": "allow-all",
+    "MinTTL": 300,
+    "DefaultTTL": 600
+  },
+  "CacheBehaviors": {
+    "Quantity": 0
+  },
+  "Enabled": true,
+  "Comment": "${website}'s CDN"
+}

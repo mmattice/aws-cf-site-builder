@@ -1,0 +1,46 @@
+#!/bin/bash
+
+# AmazonS3FullAccess
+# CloudFrontFullAccess
+
+# dependencies
+# jq awscli
+
+website=$1
+
+aws configure set preview.cloudfront true
+
+if [ ! -f ~/.aws/credentials ]; then
+  aws configure
+fi
+
+VERSION=$(date +%Y-%m-%d)  # iso formatted date
+
+S3CUIDINFO=$(aws cloudfront create-cloud-front-origin-access-identity --cloud-front-origin-access-identity-config CallerReference=randomstringhere,Comment="$website OAI" | jq '{S3CUID: .CloudFrontOriginAccessIdentity.S3CanonicalUserId, Id: .CloudFrontOriginAccessIdentity.Id, Location: .Location }')
+
+S3CUID=$(echo "$S3CUIDINFO" | jq '.S3CUID')
+OAIId=$(echo "$S3CUIDINFO" | jq '.Id')
+OAIURI=$(echo "$S3CUIDINFO" | jq '.Location')
+
+CERTARN=$(aws acm list-certificates  | jq "$( echo '.CertificateSummaryList[] | select( .DomainName=="${website}") | .CertificateArn' | envsubst)"
+
+aws s3api create-bucket --bucket ${website}.s3.amazonaws.com      --acl private
+aws s3api create-bucket --bucket ${website}_logs.s3.amazonaws.com --acl private
+aws s3api put-bucket-website --bucket ${website}.s3.amazonaws.com --website-configuration file://s3website.json
+
+aws s3api put-bucket-acl --bucket ${website}.s3.amazonaws.com      \
+    --grant-read     URI=http://acs.amazonaws.com/groups/s3/LogDelivery
+aws s3api put-bucket-acl --bucket ${website}_logs.s3.amazonaws.com \
+    --grant-write    URI=http://acs.amazonaws.com/groups/s3/LogDelivery \
+    --grant-read     URI=http://acs.amazonaws.com/groups/s3/LogDelivery \
+    --grant-read-acp URI=http://acs.amazonaws.com/groups/s3/LogDelivery
+
+aws s3api put-bucket-logging --bucket ${website}.s3.amazonaws.com \
+    --bucket-logging-status "$( echo '{ "LoggingEnabled": { "TargetBucket": "${website}_logs.s3.amazonaws.com", "TargetPrefix": "s3_logs/" }}' | envsubst )"
+
+if [ -z "$CERTARN" ]; then
+  cloudfront create-distribution --distribution-config $( envsubst < template-cloudfront.json ) 
+else
+  cloudfront create-distribution --distribution-config $( envsubst < template-cloudfront.json | jq "$(echo '. +{"ViewerCertificate": {"CloudFrontDefaultCertificate": false, "ACMCertificateArn": "$CERTARN", "SSLSupportMethod": "sni-only", "MinimumProtocolVersion": "TLSv1" }}' | envsubst)) 
+fi
+
