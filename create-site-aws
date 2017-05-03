@@ -70,4 +70,4 @@ CFRES=$(aws cloudfront create-distribution \
 
 echo "${CFRES}" > cloudfront-setup-out.json
 
-export CFDOMAIN="$(echo "${CFRES}" | jq -r '.Distribution.DomainName')"
+export CFURI="$(echo "${CFRES}" | jq -r '.Distribution.DomainName')"
