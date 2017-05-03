@@ -2,45 +2,72 @@
 
 # AmazonS3FullAccess
 # CloudFrontFullAccess
+# AmazonRoute53FullAccess
+# IAMUserChangePassword -- not necessarily for this, but...
 
 # dependencies
 # jq awscli
 
-website=$1
+export website=$1
 
+if [ -z "$website" ]; then
+  echo "required argument 'hostname' missing"
+  exit 1
+fi
+
+# enable preview mode for cloudfront features
 aws configure set preview.cloudfront true
 
+# we need some credentials
 if [ ! -f ~/.aws/credentials ]; then
   aws configure
 fi
 
-VERSION=$(date +%Y-%m-%d)  # iso formatted date
+export CERTARN=$(aws acm list-certificates  | jq -r "$( echo '.CertificateSummaryList[] | select( .DomainName=="${website}") | .CertificateArn' | envsubst)")
 
-S3CUIDINFO=$(aws cloudfront create-cloud-front-origin-access-identity --cloud-front-origin-access-identity-config CallerReference=randomstringhere,Comment="$website OAI" | jq '{S3CUID: .CloudFrontOriginAccessIdentity.S3CanonicalUserId, Id: .CloudFrontOriginAccessIdentity.Id, Location: .Location }')
+# this is actually idempotent if your comment & caller reference stay the same
+# but, caller reference must change for new sites
+export S3CUIDINFO=$(aws cloudfront create-cloud-front-origin-access-identity --cloud-front-origin-access-identity-config CallerReference="https://github.com/mmattice/createcloudfrontwebsite.$website",Comment="$website OAI" | jq '{S3CUID: .CloudFrontOriginAccessIdentity.S3CanonicalUserId, Id: .CloudFrontOriginAccessIdentity.Id, Location: .Location }')
 
-S3CUID=$(echo "$S3CUIDINFO" | jq '.S3CUID')
-OAIId=$(echo "$S3CUIDINFO" | jq '.Id')
-OAIURI=$(echo "$S3CUIDINFO" | jq '.Location')
+export S3CUID=$(echo "$S3CUIDINFO" | jq -r '.S3CUID')
+export OAIId=$(echo "$S3CUIDINFO" | jq -r '.Id')
+export OAIURI=$(echo "$S3CUIDINFO" | jq -r '.Location')
 
-CERTARN=$(aws acm list-certificates  | jq "$( echo '.CertificateSummaryList[] | select( .DomainName=="${website}") | .CertificateArn' | envsubst)"
+aws s3api create-bucket \
+    --bucket ${website}      \
+    --acl private  > /dev/null
+aws s3api create-bucket \
+    --bucket ${website}-logs \
+    --acl private  > /dev/null
+aws s3api put-bucket-website \
+    --bucket ${website} \
+    --website-configuration "$( envsubst < s3website.json )"
 
-aws s3api create-bucket --bucket ${website}.s3.amazonaws.com      --acl private
-aws s3api create-bucket --bucket ${website}_logs.s3.amazonaws.com --acl private
-aws s3api put-bucket-website --bucket ${website}.s3.amazonaws.com --website-configuration file://s3website.json
-
-aws s3api put-bucket-acl --bucket ${website}.s3.amazonaws.com      \
+aws s3api put-bucket-acl --bucket ${website}      \
+    --grant-read     id=${S3CUID} \
     --grant-read     URI=http://acs.amazonaws.com/groups/s3/LogDelivery
-aws s3api put-bucket-acl --bucket ${website}_logs.s3.amazonaws.com \
+aws s3api put-bucket-acl --bucket ${website}-logs \
+    --grant-write    id=${S3CUID} \
     --grant-write    URI=http://acs.amazonaws.com/groups/s3/LogDelivery \
     --grant-read     URI=http://acs.amazonaws.com/groups/s3/LogDelivery \
     --grant-read-acp URI=http://acs.amazonaws.com/groups/s3/LogDelivery
 
-aws s3api put-bucket-logging --bucket ${website}.s3.amazonaws.com \
-    --bucket-logging-status "$( echo '{ "LoggingEnabled": { "TargetBucket": "${website}_logs.s3.amazonaws.com", "TargetPrefix": "s3_logs/" }}' | envsubst )"
+aws s3api put-bucket-logging --bucket ${website} \
+    --bucket-logging-status "$( echo '{ "LoggingEnabled": { "TargetBucket": "${website}-logs", "TargetPrefix": "cf_logs/" }}' | envsubst )"
 
-if [ -z "$CERTARN" ]; then
-  cloudfront create-distribution --distribution-config $( envsubst < template-cloudfront.json ) 
-else
-  cloudfront create-distribution --distribution-config $( envsubst < template-cloudfront.json | jq "$(echo '. +{"ViewerCertificate": {"CloudFrontDefaultCertificate": false, "ACMCertificateArn": "$CERTARN", "SSLSupportMethod": "sni-only", "MinimumProtocolVersion": "TLSv1" }}' | envsubst)) 
+aws s3api put-bucket-policy --bucket ${website} \
+    --policy "$( envsubst < template-s3bucketpolicy.json )"
+
+dconf="$( envsubst < template-cloudfront.json )"
+if [ -n "$CERTARN" ]; then
+    jqmod='. +{"ViewerCertificate": {"CloudFrontDefaultCertificate": false, "ACMCertificateArn": "$CERTARN", "SSLSupportMethod": "sni-only", "MinimumProtocolVersion": "TLSv1" }} | .DefaultCacheBehavior.ViewerProtocolPolicy="redirect-to-https"'
+    dconf="$( echo "$dconf" | jq "$(echo "$jqmod" | envsubst)")"
 fi
+echo "$dconf" > dconf.json
 
+CFRES=$(aws cloudfront create-distribution \
+	    --distribution-config "$dconf")
+
+echo "${CFRES}" > cloudfront-setup-out.json
+
+export CFDOMAIN="$(echo "${CFRES}" | jq -r '.Distribution.DomainName')"

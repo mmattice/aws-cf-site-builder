@@ -1,13 +1,12 @@
 {
-   "Version":"${VERSION}",
-   "Id":"${website}.S3CloudFrontPolicy",
-   "Statement":[
-     {
-       "Sid":" Grant a CloudFront Origin Identity access to support access to the bucket",
-       "Effect":"Allow",
-       "Principal":{"CanonicalUser":"${S3CUID}"},
-       "Action":["s3:GetObject","s3:ListBucket"],
-       "Resource":["arn:aws:s3:::myblog/*", "arn:aws:s3:::myblog"]
-     }
-   ]
+    "Id" : "${website}.S3CloudFrontPolicy",
+    "Statement" : [
+	{
+	    "Sid" : "Grant a CloudFront Origin Identity access to support access to the bucket",
+	    "Effect" : "Allow",
+	    "Principal" : {"CanonicalUser" : "${S3CUID}"},
+	    "Action" : ["s3:GetObject","s3:ListBucket"],
+	    "Resource" : ["arn:aws:s3:::${website}/*", "arn:aws:s3:::${website}"]
+	}
+    ]
 }
