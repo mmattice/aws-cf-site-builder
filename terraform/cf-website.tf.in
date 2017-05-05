@@ -1,0 +1,103 @@
+resource "aws_s3_bucket" "${website_TF}" {
+  bucket = "${website}"
+  acl    = "private"
+
+  website = {
+    error_document = "error.html"
+    index_document = "index.html"
+  }
+
+  logging = {
+    target_bucket = "${website}-logs"
+    target_prefix = "cf_logs/"
+  }
+
+  tags {
+    Use = "${website}"
+  }
+}
+
+resource "aws_s3_bucket" "${website_TF}_logs" {
+  bucket = "${website}-logs"
+  acl    = "private"
+
+  tags {
+    Use = "${website}"
+  }
+}
+
+resource "aws_cloudfront_origin_access_identity" "${website_TF}_OAI" {
+  comment = "${website} OAI"
+}
+
+data "aws_acm_certificate" "${website_TF}_ACM" {
+  domain   = "${website}"
+  statuses = ["ISSUED"]
+}
+
+resource "aws_cloudfront_distribution" "${website_TF}_distribution" {
+  origin {
+    domain_name = "${aws_s3_bucket.${website_TF}.bucket_domain_name}"
+    origin_id   = "${website}.s3.amazonaws.com"
+
+    s3_origin_config {
+      origin_access_identity = "${aws_cloudfront_origin_access_identity.${website_TF}_OAI.cloudfront_access_identity_path}"
+    }
+  }
+
+  enabled             = true
+  is_ipv6_enabled     = true
+  comment             = "${website}'s CDN"
+  default_root_object = "index.html"
+
+  logging_config {
+    include_cookies = true
+    bucket          = "${aws_s3_bucket.${website_TF}_logs.bucket_domain_name}"
+    prefix          = "cf_logs/"
+  }
+
+  aliases = ["${website}"]
+
+  default_cache_behavior {
+    allowed_methods  = ["HEAD", "GET"]
+    cached_methods   = ["HEAD", "GET"]
+    target_origin_id = "${website}.s3.amazonaws.com"
+
+    forwarded_values {
+      query_string = true
+
+      cookies {
+	forward = "none"
+      }
+    }
+
+    viewer_protocol_policy = "redirect-to-https"
+    min_ttl                = 300
+    default_ttl            = 600
+    max_ttl                = 31536000
+  }
+
+  price_class = "PriceClass_All"
+
+  restrictions {
+    geo_restriction {
+      restriction_type = "none"
+    }
+  }
+
+  tags {
+    Environment = "production"
+    Use = "${website}"
+  }
+
+  viewer_certificate {
+    cloudfront_default_certificate = false
+    acm_certificate_arn = "${data.aws_acm_certificate.${website_TF}_ACM.arn}"
+    ssl_support_method = "sni-only"
+    minimum_protocol_version = "TLSv1"
+  }
+}
+
+output "cloudfront_host" {
+  value = "${aws_cloudfront_distribution.${website_TF}_distribution.domain_name}"
+}

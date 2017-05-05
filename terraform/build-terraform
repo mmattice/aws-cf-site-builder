@@ -1,0 +1,12 @@
+#!/bin/bash
+
+export website=$1
+if [ -z "$website" ]; then
+    echo "missing <website> parameter"
+fi
+
+# transform periods into underscores as terraform uses
+# periods for finding other resources on a path
+export website_TF=$(echo ${website} | tr "." "_")
+
+envsubst < cf-website.tf.in > cf-website.tf
