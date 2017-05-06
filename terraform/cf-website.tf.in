@@ -98,6 +98,6 @@ resource "aws_cloudfront_distribution" "${website_TF}_distribution" {
   }
 }
 
-output "cloudfront_host" {
+output "cloudfront_host_${website}" {
   value = "${aws_cloudfront_distribution.${website_TF}_distribution.domain_name}"
 }
