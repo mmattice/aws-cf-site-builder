@@ -19,7 +19,7 @@ resource "aws_s3_bucket" "${website_TF}" {
 
 resource "aws_s3_bucket" "${website_TF}_logs" {
   bucket = "${website}-logs"
-  acl    = "private"
+  acl    = "log-delivery-write"
 
   tags {
     Use = "${website}"
