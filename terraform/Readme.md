@@ -3,7 +3,7 @@
 This script takes one argument - the site name you're building.
 
 ```
-build-terraform www.example.com
+./build-terraform www.example.com
 ```
 
 What that does is builds a ${website}-cf-website.tf file from the cf-website.tf.in template.
