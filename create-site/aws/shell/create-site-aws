@@ -8,6 +8,7 @@
 # dependencies
 # jq awscli
 
+scriptdir=$(dirname $0)
 export website=$1
 
 if [ -z "$website" ]; then
@@ -41,7 +42,7 @@ aws s3api create-bucket \
     --acl private  > /dev/null
 aws s3api put-bucket-website \
     --bucket ${website} \
-    --website-configuration "$( envsubst < s3website.json )"
+    --website-configuration "$( envsubst < ${scriptdir}/s3website.json )"
 
 aws s3api put-bucket-acl --bucket ${website}      \
     --grant-read     id=${S3CUID} \
@@ -56,9 +57,9 @@ aws s3api put-bucket-logging --bucket ${website} \
     --bucket-logging-status "$( echo '{ "LoggingEnabled": { "TargetBucket": "${website}-logs", "TargetPrefix": "cf_logs/" }}' | envsubst )"
 
 aws s3api put-bucket-policy --bucket ${website} \
-    --policy "$( envsubst < template-s3bucketpolicy.json )"
+    --policy "$( envsubst < ${scriptdir}/template-s3bucketpolicy.json )"
 
-dconf="$( envsubst < template-cloudfront.json )"
+dconf="$( envsubst < ${scriptdir}/template-cloudfront.json )"
 if [ -n "$CERTARN" ]; then
     jqmod='. +{"ViewerCertificate": {"CloudFrontDefaultCertificate": false, "ACMCertificateArn": "$CERTARN", "SSLSupportMethod": "sni-only", "MinimumProtocolVersion": "TLSv1" }} | .DefaultCacheBehavior.ViewerProtocolPolicy="redirect-to-https"'
     dconf="$( echo "$dconf" | jq "$(echo "$jqmod" | envsubst)")"
