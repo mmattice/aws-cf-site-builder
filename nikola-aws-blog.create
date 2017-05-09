@@ -1,0 +1,338 @@
+#!/bin/bash 
+
+urlencode() {
+    # urlencode <string>
+    local length="${#1}"
+    for (( i = 0; i < length; i++ )); do
+        local c="${1:i:1}"
+        case $c in
+            [a-zA-Z0-9.~_-]) printf "$c" ;;
+            *) printf '%%%02X' "'$c"
+        esac
+    done
+}
+
+urldecode() {
+    # urldecode <string>
+
+    local url_encoded="${1//+/ }"
+    printf '%b' "${url_encoded//%/\\x}"
+}
+
+export NAME=$(git config --get user.name)
+export EMAIL=$(git config --get user.email)
+
+export website=$1
+shift
+if [ -z "$website"]; then
+    echo "required arguments <website> <basepath> missing"
+    exit 1
+fi
+export basepath=$1
+shift
+if [ -z "$basepath"]; then
+    echo "required argument <basepath> missing"
+    exit 1
+fi
+
+set -e
+
+if [ ! -f ~/.aws/credentials ]; then
+    aws configure
+fi
+export PROJECTNAME=$(echo "${website}" | sed 's/\./_/g')
+export ACCOUNTID=$(aws sts get-caller-identity --output text --query 'Account')
+
+# figure out if we have a cert for this site to set PROTOCOL with
+export CERTARN=$(aws acm list-certificates  | jq -r "$( echo '.CertificateSummaryList[] | select( .DomainName=="${website}") | .CertificateArn' | envsubst)")
+
+if [ -z "${CERTARN}" ]; then
+    export PROTOCOL=http
+else
+    export PROTOCOL=https
+fi
+
+# install py3 virtualenv with Nikola
+[ ! -e "${basepath}"/nikola/bin/activate ] && virtualenv -p /usr/bin/python3 "${basepath}"/nikola
+. "${basepath}"/nikola/bin/activate
+pip install --upgrade "Nikola[extras]"
+
+# set up framework
+[ -f "${basepath}/${website}" ] || mkdir "${basepath}/${website}"
+cd "${basepath}/${website}"
+[ -f .git ] || nikola init -q .
+[ -f .git ] || git init .
+
+sed -i \
+    -e "$(echo 's~^SITE_URL.*~SITE_URL = "${PROTOCOL}://${website}/"~' | envsubst)" \
+    -e "$(echo 's~^BLOG_AUTHOR.*~BLOG_AUTHOR = "${NAME}"~' | envsubst)" \
+    -e "$(echo 's~^BLOG_EMAIL.*~BLOG_EMAIL = "${EMAIL}"~' | envsubst)" \
+    -e "$(echo 's~^BLOG_TITLE.*~BLOG_TITLE = "${NAME}''''s blog "~' | envsubst)" \
+    -e "$(echo 's~^BLOG_DESCRIPTION.*~BLOG_DESCRIPTION = "${NAME}''''s musings "~' | envsubst)" \
+    conf.py
+
+cat > .gitignore <<EOF
+cache
+.doit.db
+__pycache__
+output
+EOF
+
+for d in files galleries listings pages posts ; do touch $d/.noempty ; done
+
+git checkout -b src > /dev/null
+git add .
+git commit -m 'Initial Nikola tree'
+
+envsubst > buildspec.yml <<EOF
+version: 0.1
+   
+phases:
+  install:
+    commands:
+      - pip install --upgrade "Nikola[extras]"
+  build:
+    commands:
+      - nikola build
+  post_build:
+    commands:
+      - aws s3 sync --delete output/ s3://${website}
+EOF
+
+git add buildspec.yml
+git commit -m 'add codebuild buildspec.yml'
+
+REPOINFO=$(aws codecommit create-repository \
+	       --repository-name ${website} \
+	       --repository-description "${website} source material" || \
+		  aws codecommit get-repository \
+		      --repository-name ${website}
+	)
+
+REPOSSHURL=$(echo "$REPOINFO" | jq -r '.repositoryMetadata.cloneUrlSsh')
+export REPOHTTPURL=$(echo "$REPOINFO" | jq -r '.repositoryMetadata.cloneUrlHttp')
+
+git remote add origin ${REPOSSHURL}
+
+# list keys
+for key in $(aws iam list-ssh-public-keys | jq -c '.SSHPublicKeys[] | { UserName: .UserName, SSHPublicKeyId: .SSHPublicKeyId, Encoding: "SSH" }') ; do
+    # get info for each key
+    KEYINFO="$(aws iam get-ssh-public-key --cli-input-json "$key" | jq -r '{ KEY: .SSHPublicKey.SSHPublicKeyBody, KEYID: .SSHPublicKey.SSHPublicKeyId}')"
+    KEY=$(echo "${KEYINFO}" | jq -r '.KEY')
+    ID=$(echo "${KEYINFO}" | jq -r '.KEYID')
+    for keyfile in $(grep -rl "${KEY}" ~/.ssh/); do
+	# stash found public key file entries into ssh config so we can push
+	echo found ${ID} in ${keyfile} -- adding to ~/.ssh/config
+        cat >> ~/.ssh/config <<EOF
+Host git-codecommit.*.amazonaws.com
+    user ${ID}
+    IdentityFile ${keyfile}
+
+EOF
+    done
+done
+
+export CBP="$(echo '{
+    "Version" :"2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Resource": [
+                "arn:aws:logs:us-east-1:${ACCOUNTID}:log-group:/aws/codebuild/${PROJECTNAME}",
+                "arn:aws:logs:us-east-1:${ACCOUNTID}:log-group:/aws/codebuild/${PROJECTNAME}:*"
+            ],
+            "Action": [
+                "logs:CreateLogGroup",
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Resource": [
+                "arn:aws:s3:::codepipeline-us-east-1-*"
+            ],
+            "Action": [
+                "s3:PutObject",
+                "s3:GetObject",
+                "s3:GetObjectVersion"
+            ]
+        },
+        {
+            "Effect": "Allow",
+            "Resource": [
+                "arn:aws:codecommit:us-east-1:${ACCOUNTID}:${website}"
+            ],
+            "Action": [
+                "codecommit:GitPull"
+            ]
+        },
+	{
+	    "Effect" : "Allow",
+	    "Resource": ["arn:aws:s3:::${website}"],
+	    "Action": ["s3:ListBucket"]
+	},
+	{
+	    "Effect" : "Allow",
+	    "Resource": ["arn:aws:s3:::${website}/*"],
+	    "Action": ["s3:PutObject", "s3:GetObject", "s3:DeleteObject" ]
+	}
+    ]
+}' | envsubst)"
+
+export POLICY="$(aws iam create-policy --policy-name "CodeBuild.${website}.deploy" --path "/service-role/" --policy-document "${CBP}" --description "Permit CodeBuild to sync to s3://${website}" | jq -r '.Policy.Arn')"
+
+ARPD='{
+    "Version": "2012-10-17", 
+    "Statement": [
+        {
+            "Action": "sts:AssumeRole", 
+            "Effect": "Allow", 
+            "Principal": {
+                "Service": "codebuild.amazonaws.com"
+            }
+        }
+    ]
+}'
+
+ROLEARN=$(aws iam create-role --path '/service-role/' \
+	      --role-name "Codebuild-${website}" \
+	      --assume-role-policy-document "${ARPD}" | jq -r '.Role.Arn')
+
+aws iam attach-role-policy --role-name "Codebuild-${website}" --policy-arn "${POLICY}"
+
+export PROJECTSOURCE="$(echo '{"type":"CODECOMMIT", "location":"${REPOHTTPURL}"}' | envsubst)"
+
+sleep 20
+
+aws codebuild create-project --name ${PROJECTNAME} \
+    --description "Build Project for ${website}" \
+    --source "${PROJECTSOURCE}" \
+    --artifacts '{"type":"S3", "location":"'${website}'", "name" : "output"}' \
+    --environment '{"type":"LINUX_CONTAINER","image":"aws/codebuild/python:3.5.2","computeType":"BUILD_GENERAL1_SMALL"}' \
+    --service-role "${ROLEARN}"
+
+CPP='{
+  "Statement": [
+    {
+      "Action": [
+        "s3:*",
+      ],
+      "Resource": "*",
+      "Effect": "Allow"
+    },
+    {
+      "Action": [
+        "codecommit:CancelUploadArchive",
+        "codecommit:GetBranch",
+        "codecommit:GetCommit",
+        "codecommit:GetUploadArchiveStatus",
+        "codecommit:UploadArchive"
+      ],
+      "Resource": "*",
+      "Effect": "Allow"
+    },
+    {
+      "Action": [
+        "codebuild:BatchGetBuilds",
+        "codebuild:StartBuild"
+      ],
+      "Resource": "*",
+      "Effect": "Allow"
+    }
+  ],
+  "Version": "2012-10-17"
+}
+'
+
+export CPPOLICY="$(aws iam create-policy --policy-name "CodePipeline.${website}.start" --path "/service-role/" --policy-document "${CPP}" --description "Permit CodePipeline to build ${website}" | jq -r '.Policy.Arn')"
+
+CPARPD='{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Action": "sts:AssumeRole",
+            "Effect": "Allow",
+            "Principal": {
+                "Service": "codepipeline.amazonaws.com"
+            }
+        }
+    ]
+}'
+
+CPROLEARN=$(aws iam create-role --path '/service-role/' \
+                --role-name "CodePipeline-${website}" \
+                --assume-role-policy-document "${CPARPD}" | jq -r '.Role.Arn')
+
+aws iam attach-role-policy --role-name "CodePipeline-${website}" --policy-arn "${CPPOLICY}"
+
+PIPELINE="$(echo '
+{
+        "artifactStore": {
+            "type": "S3",
+            "location": "codepipeline-us-east-1-65477193901"
+        },
+        "name": "autobuild_${website}",
+        "roleArn": "${CPROLEARN}",
+        "stages": [
+            {
+                "name": "Source",
+                "actions": [
+                    {
+                        "inputArtifacts": [],
+                        "name": "Source",
+                        "actionTypeId": {
+                            "category": "Source",
+                            "owner": "AWS",
+                            "version": "1",
+                            "provider": "CodeCommit"
+                        },
+                        "outputArtifacts": [
+                            {
+                                "name": "MyApp"
+                            }
+                        ],
+                        "configuration": {
+                            "BranchName": "src",
+                            "RepositoryName": "${website}"
+                        },
+                        "runOrder": 1
+                    }
+                ]
+            },
+            {
+                "name": "Build",
+                "actions": [
+                    {
+                        "inputArtifacts": [
+                            {
+                                "name": "MyApp"
+                            }
+                        ],
+                        "name": "CodeBuild",
+                        "actionTypeId": {
+                            "category": "Build",
+                            "owner": "AWS",
+                            "version": "1",
+                            "provider": "CodeBuild"
+                        },
+                        "outputArtifacts": [
+                            {
+                                "name": "MyAppBuild"
+                            }
+                        ],
+                        "configuration": {
+                            "ProjectName": "${PROJECTNAME}"
+                        },
+                        "runOrder": 1
+                    }
+                ]
+            }
+        ],
+        "version": 1
+}' | envsubst)"
+
+aws codepipeline create-pipeline --pipeline "${PIPELINE}"
+
+
+git push -u origin master
