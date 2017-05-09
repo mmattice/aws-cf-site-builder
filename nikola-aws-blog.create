@@ -24,15 +24,19 @@ export EMAIL=$(git config --get user.email)
 
 export website=$1
 shift
-if [ -z "$website"]; then
+if [ -z "$website" ]; then
     echo "required arguments <website> <basepath> missing"
     exit 1
 fi
 export basepath=$1
 shift
-if [ -z "$basepath"]; then
+if [ -z "$basepath" ]; then
     echo "required argument <basepath> missing"
     exit 1
+fi
+
+if [ ! -d "$basepath" ]; then
+    mkdir -p "$basepath"
 fi
 
 set -e
@@ -55,7 +59,8 @@ fi
 # install py3 virtualenv with Nikola
 [ ! -e "${basepath}"/nikola/bin/activate ] && virtualenv -p /usr/bin/python3 "${basepath}"/nikola
 . "${basepath}"/nikola/bin/activate
-pip install --upgrade "Nikola[extras]"
+echo "building virtualenv..."
+pip install --upgrade "Nikola[extras]" > /dev/null
 
 # set up framework
 [ -f "${basepath}/${website}" ] || mkdir "${basepath}/${website}"
@@ -210,13 +215,13 @@ aws codebuild create-project --name ${PROJECTNAME} \
     --source "${PROJECTSOURCE}" \
     --artifacts '{"type":"S3", "location":"'${website}'", "name" : "output"}' \
     --environment '{"type":"LINUX_CONTAINER","image":"aws/codebuild/python:3.5.2","computeType":"BUILD_GENERAL1_SMALL"}' \
-    --service-role "${ROLEARN}"
+    --service-role "${ROLEARN}" > /dev/null
 
 CPP='{
   "Statement": [
     {
       "Action": [
-        "s3:*",
+        "s3:*"
       ],
       "Resource": "*",
       "Effect": "Allow"
@@ -332,7 +337,9 @@ PIPELINE="$(echo '
         "version": 1
 }' | envsubst)"
 
-aws codepipeline create-pipeline --pipeline "${PIPELINE}"
+sleep 20
+
+aws codepipeline create-pipeline --pipeline "${PIPELINE}" > /dev/null
 
 
-git push -u origin master
+git push -u origin src
