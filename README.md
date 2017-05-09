@@ -1,5 +1,9 @@
 # aws-cf-site-builder
 
+## makeithappen
+
+call with your website name (www.example.com) and a path to set up your working directory
+
 ## create-site/aws
 
 build a cloudfront based, s3 backed site
