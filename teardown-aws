@@ -1,0 +1,26 @@
+#!/bin/bash
+
+export website=$1
+shift
+if [ -z "$website" ]; then
+    echo "required arguments <website> <basepath> missing"
+    exit 1
+fi
+
+export PROJECTNAME=$(echo "${website}" | sed 's/\./_/g')
+export ACCOUNTID=$(aws sts get-caller-identity --output text --query 'Account')
+
+aws codepipeline delete-pipeline --name autobuild_${website}
+aws codebuild delete-project --name ${PROJECTNAME}
+for role in Codebuild-${website} CodePipeline-${website} ; do
+    for ARN in $(aws iam list-attached-role-policies --role-name $role | jq -r '.AttachedPolicies[] | .PolicyArn'); do
+	aws iam detach-role-policy --role-name $role --policy-arn $ARN
+	for vid in $(aws iam list-policy-versions --policy-arn $ARN | jq -r '.Versions[] | .VersionId'); do
+	    aws iam delete-policy-version --policy-arn $ARN --version-id $vid > /dev/null
+	done
+	aws iam delete-policy --policy-arn $ARN
+    done
+    aws iam delete-role --role-name $role
+done
+
+aws codecommit delete-repository --repository-name ${website} > /dev/null
