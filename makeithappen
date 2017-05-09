@@ -1,0 +1,18 @@
+#!/bin/bash
+
+export website=$1
+shift
+if [ -z "$website" ]; then
+    echo "required arguments <website> <basepath> missing"
+    exit 1
+fi
+export basepath=$1
+shift
+if [ -z "$basepath" ]; then
+    echo "required argument <basepath> missing"
+    exit 1
+fi
+
+scriptdir=$(dirname $0)
+${scriptdir}/create-site/aws/shell/create-site-aws ${website}
+${scriptdir}/create-blog/aws/nikola-aws-blog.create ${website} ${basepath}
