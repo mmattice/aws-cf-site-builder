@@ -74,6 +74,7 @@ sed -i \
     -e "$(echo 's~^BLOG_EMAIL.*~BLOG_EMAIL = "${EMAIL}"~' | envsubst)" \
     -e "$(echo 's~^BLOG_TITLE.*~BLOG_TITLE = "${NAME}''''s blog "~' | envsubst)" \
     -e "$(echo 's~^BLOG_DESCRIPTION.*~BLOG_DESCRIPTION = "${NAME}''''s musings "~' | envsubst)" \
+    -e 's/^STRIP_INDEXES.*/STRIP_INDEXES = False/' \
     conf.py
 
 cat > .gitignore <<EOF
