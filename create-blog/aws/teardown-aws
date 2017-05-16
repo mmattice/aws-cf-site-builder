@@ -16,7 +16,7 @@ for role in Codebuild-${website} CodePipeline-${website} ; do
     for ARN in $(aws iam list-attached-role-policies --role-name $role | jq -r '.AttachedPolicies[] | .PolicyArn'); do
 	aws iam detach-role-policy --role-name $role --policy-arn $ARN
 	for vid in $(aws iam list-policy-versions --policy-arn $ARN | jq -r '.Versions[] | .VersionId'); do
-	    aws iam delete-policy-version --policy-arn $ARN --version-id $vid > /dev/null
+	    aws iam delete-policy-version --policy-arn $ARN --version-id $vid 2> /dev/null
 	done
 	aws iam delete-policy --policy-arn $ARN
     done
